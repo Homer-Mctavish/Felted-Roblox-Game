@@ -11,12 +11,14 @@ local LocalHand = require(script.Parent.LocalHand)
 local LeanToward = require(script.Parent.LeanToward)
 local LeanTowardRemote = ReplicatedStorage.Remotes:WaitForChild("LeanToward")
 
--- example: nearest other player’s character
+-- ---------------------------------------------------------------------------
+-- TARGETING
+-- ---------------------------------------------------------------------------
 local function getTargetCharacter()
 	local myRoot = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 	if not myRoot then return nil end
 
-	local closest, closestDist = nil, 50 -- max range in studs
+	local closest, closestDist = nil, 50
 	for _, other in ipairs(Players:GetPlayers()) do
 		if other ~= player and other.Character then
 			local root = other.Character:FindFirstChild("HumanoidRootPart")
@@ -32,22 +34,20 @@ local function getTargetCharacter()
 	return closest
 end
 
-
--- Called when the player confirms a card
+-- ---------------------------------------------------------------------------
+-- PLAY CARD (single FireServer — fixed double-fire bug)
+-- ---------------------------------------------------------------------------
 local function onPlayCard(cardName, index)
 	print("Playing card:", cardName)
-	PlayCard:FireServer(cardName)
-	local targetCharacter = getTargetCharacter()
-	PlayCard:FireServer(cardName, targetCharacter)
-	-- Server will later update the hand after validating
+	local target = getTargetCharacter()
+	PlayCard:FireServer(cardName, target)
 end
 
-
--- Create the private hand UI once
+-- ---------------------------------------------------------------------------
+-- UI SETUP
+-- ---------------------------------------------------------------------------
 LocalHand.create(CardData, onPlayCard)
 
-
--- Character spawn → floating cards
 local function onCharacterAdded(character)
 	task.wait(0.3)
 	FloatingHand.create(character)
@@ -64,25 +64,44 @@ LeanTowardRemote.OnClientEvent:Connect(function(targetCharacter, duration, pullR
 	end)
 end)
 
--- Handle updates from server
+-- ---------------------------------------------------------------------------
+-- HAND UPDATES
+-- ---------------------------------------------------------------------------
 local function onHandUpdated(data)
 	if data.isOwner then
-		-- Update private hand (bottom of screen) + deck count
+		-- Slot locks always update if present
+		if data.slotLocks then
+			LocalHand.setSlotLocks(data.slotLocks)
+		end
+
+		-- If this is ONLY a slot update, don't rebuild the whole hand
+		if data.isSlotUpdate then
+			return
+		end
+
+		-- Full hand update
 		LocalHand.update(data.fullHand, CardData, data.selectableCount, data.deckCount)
-		print("CLIENT fullHand:", table.concat(data.fullHand or {}, ", "))
-		for i, cardName in ipairs(data.fullHand or {}) do
-			if CardData[cardName] then
-				print(i, cardName, "→ FOUND in CardData")
-			else
-				print(i, cardName, "→ MISSING from CardData")
+
+		-- Extra plays
+		if data.extraPlays then
+			LocalHand.setExtraPlays(data.extraPlays)
+		end
+
+		-- Effect feedback
+		if data.effectResults then
+			for _, res in ipairs(data.effectResults) do
+				if res.Type == "ExtraPlays" then
+					LocalHand.showToast("+" .. res.Amount .. " free plays!")
+				end
 			end
 		end
-		-- Update floating public cards above your head
+
+		-- Floating public cards above own head
 		if player.Character then
 			FloatingHand.update(player.Character, data.publicCards, CardData)
 		end
 	else
-		-- Other players only update the floating cards
+		-- Other player: just update their floating cards
 		local otherPlayer = data.player
 		if otherPlayer and otherPlayer.Character then
 			FloatingHand.update(otherPlayer.Character, data.publicCards, CardData)
@@ -92,7 +111,9 @@ end
 
 UpdateHand.OnClientEvent:Connect(onHandUpdated)
 
--- Desktop number keys (1-6)
+-- ---------------------------------------------------------------------------
+-- INPUT
+-- ---------------------------------------------------------------------------
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 
@@ -110,5 +131,3 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		LocalHand.selectCard(index)
 	end
 end)
-
-
