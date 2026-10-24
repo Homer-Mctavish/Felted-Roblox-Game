@@ -4,7 +4,7 @@ local Players = game:GetService("Players")
 local CardData = require(ReplicatedStorage.Modules.CardData)
 
 -- ============================================================================
--- INLINED COMBAT MANAGER (no external module required)
+-- INLINED COMBAT MANAGER
 -- ============================================================================
 local CombatManager = {}
 local combatStates = {}
@@ -109,7 +109,6 @@ end)
 -- ============================================================================
 local PlayCard = ReplicatedStorage.Remotes.PlayCard
 local UpdateHand = ReplicatedStorage.Remotes.UpdateHand
-local LeanTowardRemote = ReplicatedStorage.Remotes:WaitForChild("LeanToward")
 
 local CombatUpdate = ReplicatedStorage.Remotes:FindFirstChild("CombatUpdate")
 if not CombatUpdate then
@@ -122,6 +121,9 @@ end
 -- STATE
 -- ============================================================================
 local playerHands = {}
+local RoundSignal = Instance.new("BindableEvent")
+RoundSignal.Name = "RoundSignal"
+RoundSignal.Parent = ReplicatedStorage
 local playDebounce = {}
 
 -- ============================================================================
@@ -299,7 +301,6 @@ PlayCard.OnServerEvent:Connect(function(player, cardName, targetCharacter)
 	local data = playerHands[player.UserId]
 	if not data then return end
 
-	-- Find card in hand
 	local index = nil
 	for i, card in ipairs(data.hand) do
 		if card.id == cardName then
@@ -309,74 +310,164 @@ PlayCard.OnServerEvent:Connect(function(player, cardName, targetCharacter)
 	end
 	if not index then return end
 
-	-- Check selectable / extra plays
 	local extra = CombatManager.GetExtraPlays(player.UserId)
-	if index > data.selectableCount and extra <= 0 then
-		return
-	end
+	if index > data.selectableCount and extra <= 0 then return end
 
-	-- Check slot locks (only for public slots 1-3)
 	if index <= 3 then
 		local locks = CombatManager.GetSlotLocks(player.UserId)
-		if locks[index] then
-			return
-		end
+		if locks[index] then return end
 	end
 
+	-- =====================================================================
+	-- CHARACTER SETUP
+	-- =====================================================================
+	local character = player.Character
+	if not character then return end
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	local root = character:FindFirstChild("HumanoidRootPart")
+	if not humanoid or not root then return end
+
+	-- Stop physics from rotating the character
+	humanoid.AutoRotate = false
+
+	-- Capture current yaw silently. NEVER write it back to root.CFrame.
+	local attackYaw = math.atan2(root.CFrame.LookVector.X, root.CFrame.LookVector.Z)
+
+	-- =====================================================================
+	-- HAND STATE
+	-- =====================================================================
 	local playedCard = data.hand[index]
 	table.remove(data.hand, index)
 
-	-- Consume extra play if used
 	if index > data.selectableCount and extra > 0 then
 		CombatManager.ConsumeExtraPlay(player.UserId)
 	end
 
-	-- Recycling
 	if playedCard.canRecycle then
-		playedCard.canRecycle = false   -- consumed permanently
+		playedCard.canRecycle = false
 		table.insert(data.deck, playedCard)
 	end
-	
-	-- Resolve effects
-	local effectResults = resolveEffects(player, cardName, targetCharacter)
 
-	-- Refill hand
+	local effectResults = resolveEffects(player, cardName, targetCharacter)
 	drawUpToFive(data)
 
-	-- Build payloads
-	local fullHandIds, publicCards = buildHandPayload(data)
-	local slotLocks = CombatManager.GetSlotLocks(player.UserId)
+	-- =====================================================================
+	-- ANIMATION (server loads and plays; client replicates visually)
+	-- =====================================================================
+	local track = nil
+	if CardData[cardName] and CardData[cardName].AnimationId then
+		local animator = humanoid:FindFirstChildOfClass("Animator")
+		if not animator then
+			animator = Instance.new("Animator")
+			animator.Parent = humanoid
+		end
 
-	-- Animation
-	local character = player.Character
-	local validTarget = typeof(targetCharacter) == "Instance"
-		and targetCharacter:IsA("Model")
-		and targetCharacter:FindFirstChildOfClass("Humanoid")
-		and targetCharacter ~= character
+		local animation = Instance.new("Animation")
+		animation.AnimationId = CardData[cardName].AnimationId
 
-	if character and CardData[cardName] and CardData[cardName].AnimationId then
-		local humanoid = character:FindFirstChildOfClass("Humanoid")
-		if humanoid then
-			local animator = humanoid:FindFirstChildOfClass("Animator")
-			if not animator then
-				animator = Instance.new("Animator")
-				animator.Parent = humanoid
+		track = animator:LoadAnimation(animation)
+		track.Looped = false
+		track.Priority = Enum.AnimationPriority.Action
+		track:Play()
+	end
+
+	-- =====================================================================
+	-- DISPLACEMENT (position ONLY; preserves exact rotation)
+	-- =====================================================================
+	local disp = CardData[cardName] and CardData[cardName].Displacement
+
+	local function runDisplacement()
+		if not root.Parent then return end
+
+		-- Kill momentum
+		root.AssemblyLinearVelocity = Vector3.zero
+		root.AssemblyAngularVelocity = Vector3.zero
+
+		local oldWalkSpeed = humanoid.WalkSpeed
+		if disp.LockInput then
+			humanoid.WalkSpeed = 0
+		end
+
+		local forward = Vector3.new(math.sin(attackYaw), 0, math.cos(attackYaw))
+		local startPos = root.Position
+		local goalPos = startPos + forward * disp.Distance
+
+		local startTime = os.clock()
+		while os.clock() - startTime < disp.Duration do
+			if not root.Parent then break end
+
+			local t = (os.clock() - startTime) / disp.Duration
+			if disp.Easing == "OutQuad" then
+				t = 1 - (1 - t) * (1 - t)
+			elseif disp.Easing == "InOutQuad" then
+				t = t < 0.5 and 2 * t * t or 1 - math.pow(-2 * t + 2, 2) / 2
 			end
-			local animation = Instance.new("Animation")
-			animation.AnimationId = CardData[cardName].AnimationId
-			local track = animator:LoadAnimation(animation)
-			track.Looped = false
-			track.Priority = Enum.AnimationPriority.Action
-			track:Play()
 
-			if validTarget then
-				local duration = (track.Length > 0 and track.Length) or 0.5
-				LeanTowardRemote:FireClient(player, targetCharacter, duration, 12)
+			local newX = startPos.X + (goalPos.X - startPos.X) * t
+			local newZ = startPos.Z + (goalPos.Z - startPos.Z) * t
+
+			-- Height arc (single write, no double-CFrame)
+			local newY = startPos.Y
+			if disp.Height then
+				local heightT = math.sin(t * math.pi)
+				newY = startPos.Y + disp.Height * heightT
 			end
+
+			-- Preserve exact rotation (read fresh each frame)
+			local rx, ry, rz = root.CFrame:ToOrientation()
+			root.CFrame = CFrame.new(newX, newY, newZ) * CFrame.Angles(rx, ry, rz)
+
+			task.wait()
+		end
+
+		if disp.LockInput then
+			humanoid.WalkSpeed = oldWalkSpeed
 		end
 	end
 
-	-- Notify owner
+	if disp then
+		local markerTriggered = false
+
+		-- Try marker sync first (add a "Lunge" marker in Animation Editor)
+		local markerConn
+		if track then
+			markerConn = track:GetMarkerReachedSignal("Lunge"):Once(function()
+				markerTriggered = true
+				runDisplacement()
+			end)
+		end
+
+		-- Fallback: use Delay if no marker or marker never fires
+		task.delay(disp.Delay or 0, function()
+			if not markerTriggered then
+				if markerConn then
+					markerConn:Disconnect()
+				end
+				runDisplacement()
+			end
+		end)
+	end
+
+	-- =====================================================================
+	-- CLEANUP: restore AutoRotate after attack + displacement finish
+	-- =====================================================================
+	local animLen = track and track.Length or 0.5
+	local dispTotal = disp and ((disp.Delay or 0) + disp.Duration) or 0
+	local restoreDelay = math.max(animLen, dispTotal) + 0.1
+
+	task.delay(restoreDelay, function()
+		if humanoid and humanoid.Parent then
+			humanoid.AutoRotate = true
+		end
+	end)
+
+	-- =====================================================================
+	-- NOTIFY CLIENTS
+	-- =====================================================================
+	local fullHandIds, publicCards = buildHandPayload(data)
+	local slotLocks = CombatManager.GetSlotLocks(player.UserId)
+
 	UpdateHand:FireClient(player, {
 		fullHand = fullHandIds,
 		publicCards = publicCards,
@@ -388,7 +479,6 @@ PlayCard.OnServerEvent:Connect(function(player, cardName, targetCharacter)
 		effectResults = effectResults,
 	})
 
-	-- Notify others
 	UpdateHand:FireAllClients({
 		player = player,
 		publicCards = publicCards,
@@ -404,4 +494,34 @@ Players.PlayerAdded:Connect(function(player)
 		task.wait(1)
 		dealStartingHand(player)
 	end)
+end)
+
+-- Add to HandManager.lua, near the bottom
+function IsPlayerOutOfCards(player)
+	local data = playerHands[player.UserId]
+	if not data then return true end
+	return #data.hand == 0 and #data.deck == 0
+end
+
+-- Round system integration
+RoundSignal.Event:Connect(function(action, targetPlayer)
+	if action == "Deal" then
+		dealStartingHand(targetPlayer)
+	elseif action == "Clear" then
+		playerHands[targetPlayer.UserId] = nil
+		UpdateHand:FireClient(targetPlayer, {
+			fullHand = {},
+			publicCards = {},
+			selectableCount = 0,
+			deckCount = 0,
+			isOwner = true,
+			slotLocks = {false, false, false},
+			extraPlays = 0,
+		})
+		UpdateHand:FireAllClients({
+			player = targetPlayer,
+			publicCards = {},
+			isOwner = false,
+		})
+	end
 end)
