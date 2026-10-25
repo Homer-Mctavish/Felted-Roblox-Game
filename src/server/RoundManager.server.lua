@@ -111,6 +111,29 @@ function RoundManager.EndVote()
 	if not RoundManager.voteState then return end
 	RoundManager.voteState.active = false
 
+	-- Filter to players who are still connected AND have a character
+	local validPlayers = {}
+	for _, p in ipairs(RoundManager.voteState.players) do
+		if p.Parent and p.Character then
+			table.insert(validPlayers, p)
+		end
+	end
+
+	-- NOT ENOUGH PLAYERS: cancel cleanly
+	if #validPlayers < RoundManager.MIN_PLAYERS then
+		for _, p in ipairs(RoundManager.voteState.players) do
+			if p.Parent then
+				RoundUpdate:FireClient(p, {
+					Type = "VoteCancel",
+					Reason = "Not enough players",
+				})
+			end
+		end
+		RoundManager.voteState = nil
+		return
+	end
+
+	-- Pick winner from votes (only valid voters count)
 	local counts = {}
 	for _, v in pairs(RoundManager.voteState.votes) do
 		counts[v] = (counts[v] or 0) + 1
@@ -131,9 +154,8 @@ function RoundManager.EndVote()
 		winner = keys[math.random(1, #keys)]
 	end
 
-	local players = RoundManager.voteState.players
 	RoundManager.voteState = nil
-	RoundManager.StartRound(players, winner)
+	RoundManager.StartRound(validPlayers, winner)
 end
 
 -- ============================================================================
@@ -149,6 +171,29 @@ function RoundManager.StartRound(players, arenaKey)
 		warn("Arena model missing:", info.ModelName)
 		return
 	end
+
+	-- Final safety: abort if everyone left during the vote
+	local validPlayers = {}
+	for _, p in ipairs(players) do
+		if p.Parent and p.Character then
+			table.insert(validPlayers, p)
+		end
+	end
+
+	if #validPlayers < RoundManager.MIN_PLAYERS then
+		for _, p in ipairs(players) do
+			if p.Parent then
+				RoundUpdate:FireClient(p, {
+					Type = "VoteCancel",
+					Reason = "Not enough players",
+				})
+			end
+		end
+		return
+	end
+
+		players = validPlayers  -- use the filtered list from here on
+
 
 	-- Clone and anchor EVERYTHING before parenting to Workspace
 	local arena = template:Clone()
@@ -166,7 +211,6 @@ function RoundManager.StartRound(players, arenaKey)
 	activeFolder.Parent = workspace
 
 	local slotIndex = RoundManager.AllocateSlot()
-	round.slotIndex = slotIndex -- store so we can free it later
 
 	local matchCF = CFrame.new(slotIndex * 500, 500, 0) * CFrame.Angles(math.rad(90), 0, 0)
 	arena:PivotTo(matchCF)
@@ -187,6 +231,7 @@ function RoundManager.StartRound(players, arenaKey)
 		active = true,
 		startTime = os.clock(),
 		initialPlayerCount = #players,
+		slotIndex = slotIndex,
 	}
 
 	-- Teleport and reset
@@ -284,17 +329,6 @@ function RoundManager.MonitorRound()
 					Type = "Timer",
 					TimeLeft = broadcastTime,
 				})
-			end
-		end
-		-- END CONDITION 3: Card depletion
-		if round.initialPlayerCount >= 2 then
-			local outCount = 0
-			local lastWithCards = nil
-			for userId, data in pairs(round.players) do
-				if data.alive then
-					-- You need to require HandManager or use a shared function here
-					-- For now, this is a placeholder for where you'd check
-				end
 			end
 		end
 		

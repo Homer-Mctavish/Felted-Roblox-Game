@@ -136,10 +136,10 @@ local function showVote(maps, timeLeft)
 	if voteTimer then voteTimer:Disconnect() end
 	local endTime = os.clock() + timeLeft
 	voteTimer = game:GetService("RunService").Heartbeat:Connect(function()
-		local remaining = math.ceil(endTime - os.clock())
-		if remaining < 0 then remaining = 0 end
+		local raw = endTime - os.clock()
+		local remaining = math.max(0, math.ceil(raw))
 		voteGui.Timer.Text = tostring(remaining)
-		if remaining <= 0 then
+		if raw <= 0 then
 			voteTimer:Disconnect()
 			voteTimer = nil
 		end
@@ -215,13 +215,17 @@ RoundUpdate.OnClientEvent:Connect(function(data)
 	if data.Type == "VoteStart" then
 		showVote(data.Maps, data.Time)
 	elseif data.Type == "VoteUpdate" then
-		-- could display vote counts on buttons
+		-- vote counts (optional)
+	elseif data.Type == "VoteCancel" then
+		hideVote()
 	elseif data.Type == "RoundStart" then
 		showRoundStart(data.ArenaName)
 	elseif data.Type == "RoundEnd" then
 		showRoundEnd(data.Winner)
 	elseif data.Type == "PlayerDied" then
-		-- optional: kill feed
+		-- kill feed (optional)
+	elseif data.Type == "Timer" then
+		-- optional: show match timer HUD
 	end
 end)
 

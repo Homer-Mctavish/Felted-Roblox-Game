@@ -213,10 +213,11 @@ local function onPlayCard(cardName, index)
 		isAttacking = false
 		if myHum and myHum.Parent then
 			myHum.AutoRotate = true
-			myHum.WalkSpeed = 16  -- or your game's default walkspeed
+			myHum.WalkSpeed = 16
 		end
 	end)
 end
+
 
 -- ============================================================================
 -- UI SETUP
