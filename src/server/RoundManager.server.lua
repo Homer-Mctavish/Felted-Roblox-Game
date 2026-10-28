@@ -253,7 +253,8 @@ function RoundManager.StartRound(players, arenaKey)
 			}
 
 			-- Fresh hand for the round
-			RoundSignal:Fire("Deal", p)
+			-- RoundSignal:Fire("Deal", p)
+			RoundSignal:Fire("Deal", p, "StandardPVP")
 		end
 	end
 
