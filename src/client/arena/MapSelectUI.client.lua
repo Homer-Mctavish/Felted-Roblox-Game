@@ -6,9 +6,25 @@ local UserInputService = game:GetService("UserInputService")
 local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
-local RoundUpdate = ReplicatedStorage.Remotes:WaitForChild("RoundUpdate")
-local VoteMap = ReplicatedStorage.Remotes:WaitForChild("VoteMap")
-local RequestRoundStart = ReplicatedStorage.Remotes:WaitForChild("RequestRoundStart")
+local function ensureRemote(name)
+	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	if not remotes then
+		remotes = Instance.new("Folder")
+		remotes.Name = "Remotes"
+		remotes.Parent = ReplicatedStorage
+	end
+	local r = remotes:FindFirstChild(name)
+	if not r then
+		r = Instance.new("RemoteEvent")
+		r.Name = name
+		r.Parent = remotes
+	end
+	return r
+end
+
+local RoundUpdate = ensureRemote("RoundUpdate")
+local VoteMap = ensureRemote("VoteMap")
+local RequestRoundStart = ensureRemote("RequestRoundStart")
 
 local voteGui = nil
 local voteTimer = nil
@@ -132,7 +148,6 @@ local function showVote(maps, timeLeft)
 		end)
 	end
 
-	-- Countdown
 	if voteTimer then voteTimer:Disconnect() end
 	local endTime = os.clock() + timeLeft
 	voteTimer = game:GetService("RunService").Heartbeat:Connect(function()
@@ -236,6 +251,8 @@ end)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 	if input.KeyCode == Enum.KeyCode.M then
+			print("FIRING RequestRoundStart")
+
 		RequestRoundStart:FireServer()
 	end
 end)

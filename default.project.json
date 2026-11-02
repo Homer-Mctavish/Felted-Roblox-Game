@@ -1,72 +1,21 @@
 {
-  "name": "Felted-Roblox-Game",
+  "name": "Felted-Hub",
   "tree": {
     "$className": "DataModel",
-
     "ReplicatedStorage": {
-      "Modules": {
-        "$path": "src/shared"
+      "Modules": { "$path": "src/shared" },
+      "Vendor": { "$path": "src/vendor" },
+      "Remotes": {
+        "$className": "Folder",
+        "PlayCard": { "$className": "RemoteEvent" },
+        "UpdateHand": { "$className": "RemoteEvent" },
+        "CombatUpdate": { "$className": "RemoteEvent" },
+        "VoteMap": { "$className": "RemoteEvent" },
+        "RoundUpdate": { "$className": "RemoteEvent" },
+        "RequestMatch": { "$className": "RemoteEvent" }
       }
     },
-
-    "ServerScriptService": {
-      "Server":{
-        "$path": "src/server"
-      }
-    },
-
-    "StarterPlayer": {
-      "StarterPlayerScripts": {
-        "Client": {
-          "$path": "src/client"
-        }
-      }
-    },
-
-    "Workspace": {
-      "$properties": {
-        "FilteringEnabled": true
-      },
-      "Baseplate": {
-        "$className": "Part",
-        "$properties": {
-          "Anchored": true,
-          "Color": [
-            0.38823,
-            0.37254,
-            0.38823
-          ],
-          "Locked": true,
-          "Position": [
-            0,
-            -10,
-            0
-          ],
-          "Size": [
-            512,
-            20,
-            512
-          ]
-        }
-      }
-    },
-    "Lighting": {
-      "$properties": {
-        "Ambient": [
-          0,
-          0,
-          0
-        ],
-        "Brightness": 2,
-        "GlobalShadows": true,
-        "Outlines": false,
-        "Technology": "Voxel"
-      }
-    },
-    "SoundService": {
-      "$properties": {
-        "RespectFilteringEnabled": true
-      }
-    }
+    "ServerScriptService": { "$path": "src/hub" },
+    "StarterPlayer": { "StarterPlayerScripts": { "$path": "src/client/hub" } }
   }
 }

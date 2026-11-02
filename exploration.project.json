@@ -1,0 +1,17 @@
+{
+  "name": "Felted-Exploration",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "Modules": { "$path": "src/shared" },
+      "Vendor": { "$path": "src/vendor" }
+    },
+
+    "ServerScriptService": { "$path": "src/exploration" },
+
+    "StarterPlayer": {
+      "StarterPlayerScripts": { "$path": "src/client/exploration" }
+    }
+  }
+}

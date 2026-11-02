@@ -9,16 +9,16 @@ local RoundPresets = {
 		roundTime = 60,
 		canDealDamage = true,
 	},
-	InfiniteHub = {
-		mode = "Hub",
-		handSize = 5,
-		publicCardCount = 3,
-		loopCount = math.huge,
-		comboRegainDiscarded = false,
-		maxRecycles = 999,
-		roundTime = nil,
-		canDealDamage = false,
-	},
+InfiniteHub = {
+	mode = "Hub",
+	handSize = 5,
+	publicCardCount = 3,
+	loopCount = 1,           -- was math.huge; play through once
+	comboRegainDiscarded = false,
+	maxRecycles = 999,
+	roundTime = nil,
+	canDealDamage = false,
+},
 	ComboPVP = {
 		mode = "PVP",
 		handSize = 5,

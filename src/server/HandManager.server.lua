@@ -8,20 +8,16 @@ local RoundPresets = require(ReplicatedStorage.Modules.RoundPresets)
 local PlayerDecks = require(ReplicatedStorage.Modules.PlayerDecks)
 
 -- ============================================================================
--- INLINED COMBAT MANAGER
+-- STATE
 -- ============================================================================
-local CombatManager = {}
+-- local playerHands = {}      -- legacy; kept for safety
+local playerDecks = {}      -- [userId] = Deck instance
 local combatStates = {}
-local playerDecks = {} -- [userId] = Deck instance
 local playDebounce = {}
-
-
 
 -- ============================================================================
 -- REMOTES
 -- ============================================================================
-
--- Ensure Remotes folder exists
 local remotes = ReplicatedStorage:FindFirstChild("Remotes")
 if not remotes then
 	remotes = Instance.new("Folder")
@@ -29,69 +25,32 @@ if not remotes then
 	remotes.Parent = ReplicatedStorage
 end
 
--- Create PlayCard if missing
-local PlayCard = remotes:FindFirstChild("PlayCard")
-if not PlayCard then
-	PlayCard = Instance.new("RemoteEvent")
-	PlayCard.Name = "PlayCard"
-	PlayCard.Parent = remotes
+local function ensureRemote(name)
+	local r = remotes:FindFirstChild(name)
+	if not r then
+		r = Instance.new("RemoteEvent")
+		r.Name = name
+		r.Parent = remotes
+	end
+	return r
 end
 
--- Create UpdateHand if missing
-local UpdateHand = remotes:FindFirstChild("UpdateHand")
-if not UpdateHand then
-	UpdateHand = Instance.new("RemoteEvent")
-	UpdateHand.Name = "UpdateHand"
-	UpdateHand.Parent = remotes
-end
-local CombatUpdate = ReplicatedStorage.Remotes:FindFirstChild("CombatUpdate")
-if not CombatUpdate then
-	CombatUpdate = Instance.new("RemoteEvent")
-	CombatUpdate.Name = "CombatUpdate"
-	CombatUpdate.Parent = ReplicatedStorage.Remotes
-end
+local PlayCard       = ensureRemote("PlayCard")
+local UpdateHand     = ensureRemote("UpdateHand")
+local CombatUpdate   = ensureRemote("CombatUpdate")
+local RoundUpdate    = ensureRemote("RoundUpdate")
+local VoteMap        = ensureRemote("VoteMap")
+local RequestRoundStart = ensureRemote("RequestRoundStart")
+
+
+local Coordinator = require(script.Parent.Match.MatchCoordinator)
+
+
 
 -- ============================================================================
--- STATE
+-- COMBAT MANAGER
 -- ============================================================================
-local playerHands = {}
-local RoundSignal = Instance.new("BindableEvent")
-RoundSignal.Name = "RoundSignal"
-RoundSignal.Parent = ReplicatedStorage
-local playDebounce = {}
-
-
-local function dealHand(player, presetName)
-	local preset = RoundPresets[presetName] or RoundPresets.StandardPVP
-	GameModeRegistry.set(player, presetName, preset)
-
-	local cardPool = PlayerDecks.get(player)
-	local deck = Deck.new(preset)
-	deck:build(cardPool)
-	deck:draw(preset.handSize)
-
-	playerDecks[player.UserId] = deck
-	CombatManager.Reset(player.UserId)
-	-- Notify client
-	local full = deck:getFullIds()
-	local public = deck:getPublic()
-
-	UpdateHand:FireClient(player, {
-		fullHand = full,
-		publicCards = public,
-		selectableCount = preset.publicCardCount,
-		deckCount = #deck.deck,
-		isOwner = true,
-		slotLocks = {false, false, false},
-		extraPlays = 0,
-	})
-
-	UpdateHand:FireAllClients({
-		player = player,
-		publicCards = public,
-		isOwner = false,
-	})
-end
+local CombatManager = {}
 
 function CombatManager.Reset(userId)
 	combatStates[userId] = {
@@ -106,9 +65,7 @@ function CombatManager.Reset(userId)
 end
 
 function CombatManager.GetState(userId)
-	if not combatStates[userId] then
-		CombatManager.Reset(userId)
-	end
+	if not combatStates[userId] then CombatManager.Reset(userId) end
 	return combatStates[userId]
 end
 
@@ -120,7 +77,6 @@ function CombatManager.TakeDamage(userId, amount, attackerId)
 		state.DodgeUntil = 0
 		return {Dodged = true, Damage = 0}
 	end
-
 	if state.BlockStacks > 0 then
 		state.BlockStacks -= 1
 		return {Blocked = true, Damage = 0}
@@ -189,6 +145,111 @@ Players.PlayerRemoving:Connect(function(player)
 end)
 
 -- ============================================================================
+-- LEGACY DECK HELPERS (kept for compatibility)
+-- ============================================================================
+-- local function createDeck()
+-- 	local deck = {}
+-- 	local function add(cardId, count)
+-- 		local info = CardData[cardId]
+-- 		for i = 1, count do
+-- 			table.insert(deck, {
+-- 				id = cardId,
+-- 				canRecycle = info and info.Recycles or false,
+-- 			})
+-- 		end
+-- 	end
+-- 	add("Strike", 6)
+-- 	add("Block", 4)
+-- 	add("HeavyStrike", 2)
+-- 	add("Dodge", 2)
+-- 	add("Draw", 2)
+-- 	add("Recycle", 2)
+-- 	for i = #deck, 2, -1 do
+-- 		local j = math.random(i)
+-- 		deck[i], deck[j] = deck[j], deck[i]
+-- 	end
+-- 	return deck
+-- end
+
+-- local function dealStartingHand(player)
+-- 	local deck = createDeck()
+-- 	local hand = {}
+-- 	for i = 1, 5 do
+-- 		if #deck > 0 then table.insert(hand, table.remove(deck, 1)) end
+-- 	end
+-- 	playerHands[player.UserId] = {deck = deck, hand = hand, selectableCount = 3}
+-- 	CombatManager.Reset(player.UserId)
+
+-- 	local fullHandIds = {}
+-- 	for i, card in ipairs(hand) do fullHandIds[i] = card.id end
+-- 	local publicCards = {}
+-- 	for i = 1, math.min(3, #hand) do publicCards[i] = hand[i].id end
+
+-- 	UpdateHand:FireClient(player, {
+-- 		fullHand = fullHandIds,
+-- 		publicCards = publicCards,
+-- 		selectableCount = 3,
+-- 		deckCount = #deck,
+-- 		isOwner = true,
+-- 		slotLocks = {false, false, false},
+-- 		extraPlays = 0,
+-- 	})
+-- 	UpdateHand:FireAllClients({
+-- 		player = player,
+-- 		publicCards = publicCards,
+-- 		isOwner = false,
+-- 	})
+-- end
+
+-- local function buildHandPayload(data)
+-- 	local fullHandIds = {}
+-- 	for i, card in ipairs(data.hand) do fullHandIds[i] = card.id end
+-- 	local publicCards = {}
+-- 	for i = 1, math.min(3, #data.hand) do publicCards[i] = data.hand[i].id end
+-- 	return fullHandIds, publicCards
+-- end
+
+-- local function drawUpToFive(data)
+-- 	while #data.hand < 5 and #data.deck > 0 do
+-- 		table.insert(data.hand, table.remove(data.deck, 1))
+-- 	end
+-- end
+
+-- ============================================================================
+-- NEW DECK SYSTEM
+-- ============================================================================
+local function dealHand(player, presetName)
+	local preset = RoundPresets[presetName] or RoundPresets.StandardPVP
+	GameModeRegistry.set(player, presetName, preset)
+
+	local cardPool = PlayerDecks.get(player)
+	local deck = Deck.new(preset)
+	deck:build(cardPool)
+	deck:draw(preset.handSize)
+
+	playerDecks[player.UserId] = deck
+	CombatManager.Reset(player.UserId)
+
+	local full = deck:getFullIds()
+	local public = deck:getPublic()
+
+	UpdateHand:FireClient(player, {
+		fullHand = full,
+		publicCards = public,
+		selectableCount = preset.publicCardCount,
+		deckCount = #deck.deck,
+		isOwner = true,
+		slotLocks = {false, false, false},
+		extraPlays = 0,
+	})
+	UpdateHand:FireAllClients({
+		player = player,
+		publicCards = public,
+		isOwner = false,
+	})
+end
+
+-- ============================================================================
 -- EFFECT RESOLUTION
 -- ============================================================================
 local function resolveEffects(player, cardName, targetCharacter, deck)
@@ -199,9 +260,7 @@ local function resolveEffects(player, cardName, targetCharacter, deck)
 	local targetPlayer = nil
 	if targetCharacter then
 		local hum = targetCharacter:FindFirstChildOfClass("Humanoid")
-		if hum then
-			targetPlayer = Players:GetPlayerFromCharacter(targetCharacter)
-		end
+		if hum then targetPlayer = Players:GetPlayerFromCharacter(targetCharacter) end
 	end
 
 	for _, effect in ipairs(data.Effects) do
@@ -211,25 +270,19 @@ local function resolveEffects(player, cardName, targetCharacter, deck)
 				table.insert(results, {Type = "Damage", Result = res})
 				CombatUpdate:FireClient(targetPlayer, {Type = "Hit", Data = res})
 			end
-
 		elseif effect.Type == "Block" then
 			CombatManager.AddBlock(player.UserId, effect.Stacks)
 			table.insert(results, {Type = "Block", Stacks = effect.Stacks})
-
 		elseif effect.Type == "Dodge" then
 			CombatManager.SetDodge(player.UserId, effect.Duration)
 			table.insert(results, {Type = "Dodge", Duration = effect.Duration})
-
 		elseif effect.Type == "Draw" then
 			local before = #deck.hand
 			deck:draw(effect.Amount)
-			local drawn = #deck.hand - before
-			table.insert(results, {Type = "Draw", Amount = drawn})
-
+			table.insert(results, {Type = "Draw", Amount = #deck.hand - before})
 		elseif effect.Type == "GrantExtraPlays" then
 			CombatManager.GrantExtraPlays(player.UserId, effect.Amount)
 			table.insert(results, {Type = "ExtraPlays", Amount = effect.Amount})
-
 		elseif effect.Type == "LockSlot" then
 			if targetPlayer then
 				local lockedSlot = CombatManager.LockSlot(targetPlayer.UserId, effect.SlotIndex, effect.Duration)
@@ -242,12 +295,10 @@ local function resolveEffects(player, cardName, targetCharacter, deck)
 					})
 				end
 			end
-
 		elseif effect.Type == "SelfStun" then
 			table.insert(results, {Type = "SelfStun", Duration = effect.Duration})
 		end
 	end
-
 	return results
 end
 
@@ -257,43 +308,28 @@ end
 PlayCard.OnServerEvent:Connect(function(player, cardName, targetCharacter)
 	if playDebounce[player.UserId] then return end
 	playDebounce[player.UserId] = true
-	task.delay(0.35, function()
-		playDebounce[player.UserId] = nil
-	end)
+	task.delay(0.35, function() playDebounce[player.UserId] = nil end)
 
 	local deck = playerDecks[player.UserId]
 	if not deck then return end
 
-	-- Find card in hand
 	local index = nil
 	for i, card in ipairs(deck.hand) do
-		if card.id == cardName then
-			index = i
-			break
-		end
+		if card.id == cardName then index = i; break end
 	end
 	if not index then return end
 
 	local preset = GameModeRegistry.get(player)
 	if not preset then return end
 
-	-- Respect public slots unless extra plays are active
-	if index > preset.publicCardCount and CombatManager.GetExtraPlays(player.UserId) <= 0 then
-		return
-	end
-
-	-- Check slot locks (only for public slots 1-3)
+	if index > preset.publicCardCount and CombatManager.GetExtraPlays(player.UserId) <= 0 then return end
 	if index <= 3 then
 		local locks = CombatManager.GetSlotLocks(player.UserId)
 		if locks[index] then return end
 	end
 
-	-- =====================================================================
-	-- CHARACTER SETUP
-	-- =====================================================================
 	local character = player.Character
 	if not character then return end
-
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	local root = character:FindFirstChild("HumanoidRootPart")
 	if not humanoid or not root then return end
@@ -301,9 +337,6 @@ PlayCard.OnServerEvent:Connect(function(player, cardName, targetCharacter)
 	humanoid.AutoRotate = false
 	local attackYaw = math.atan2(root.CFrame.LookVector.X, root.CFrame.LookVector.Z)
 
-	-- =====================================================================
-	-- PLAY CARD & COMBAT
-	-- =====================================================================
 	local playedCard = deck:play(index)
 	if not playedCard then return end
 
@@ -321,9 +354,6 @@ PlayCard.OnServerEvent:Connect(function(player, cardName, targetCharacter)
 	end
 	deck:recordPlay(cardName, hitLanded)
 
-	-- =====================================================================
-	-- ANIMATION
-	-- =====================================================================
 	local track = nil
 	if CardData[cardName] and CardData[cardName].AnimationId then
 		local animator = humanoid:FindFirstChildOfClass("Animator")
@@ -331,31 +361,23 @@ PlayCard.OnServerEvent:Connect(function(player, cardName, targetCharacter)
 			animator = Instance.new("Animator")
 			animator.Parent = humanoid
 		end
-
 		local animation = Instance.new("Animation")
 		animation.AnimationId = CardData[cardName].AnimationId
-
 		track = animator:LoadAnimation(animation)
 		track.Looped = false
 		track.Priority = Enum.AnimationPriority.Action
 		track:Play()
 	end
 
-	-- =====================================================================
-	-- DISPLACEMENT
-	-- =====================================================================
 	local disp = CardData[cardName] and CardData[cardName].Displacement
 	if disp then
 		task.delay(disp.Delay or 0, function()
 			if not root.Parent then return end
-
 			root.AssemblyLinearVelocity = Vector3.zero
 			root.AssemblyAngularVelocity = Vector3.zero
 
 			local oldWalkSpeed = humanoid.WalkSpeed
-			if disp.LockInput then
-				humanoid.WalkSpeed = 0
-			end
+			if disp.LockInput then humanoid.WalkSpeed = 0 end
 
 			local forward = Vector3.new(math.sin(attackYaw), 0, math.cos(attackYaw))
 			local startPos = root.Position
@@ -364,7 +386,6 @@ PlayCard.OnServerEvent:Connect(function(player, cardName, targetCharacter)
 			local startTime = os.clock()
 			while os.clock() - startTime < disp.Duration do
 				if not root.Parent then break end
-
 				local t = (os.clock() - startTime) / disp.Duration
 				if disp.Easing == "OutQuad" then
 					t = 1 - (1 - t) * (1 - t)
@@ -374,41 +395,26 @@ PlayCard.OnServerEvent:Connect(function(player, cardName, targetCharacter)
 
 				local newX = startPos.X + (goalPos.X - startPos.X) * t
 				local newZ = startPos.Z + (goalPos.Z - startPos.Z) * t
-
 				local newY = startPos.Y
 				if disp.Height then
-					local heightT = math.sin(t * math.pi)
-					newY = startPos.Y + disp.Height * heightT
+					newY = startPos.Y + disp.Height * math.sin(t * math.pi)
 				end
 
 				local rx, ry, rz = root.CFrame:ToOrientation()
 				root.CFrame = CFrame.new(newX, newY, newZ) * CFrame.Angles(rx, ry, rz)
-
 				task.wait()
 			end
 
-			if disp.LockInput then
-				humanoid.WalkSpeed = oldWalkSpeed
-			end
+			if disp.LockInput then humanoid.WalkSpeed = oldWalkSpeed end
 		end)
 	end
 
-	-- =====================================================================
-	-- CLEANUP
-	-- =====================================================================
 	local animLen = track and track.Length or 0.5
 	local dispTotal = disp and ((disp.Delay or 0) + disp.Duration) or 0
-	local restoreDelay = math.max(animLen, dispTotal) + 0.1
-
-	task.delay(restoreDelay, function()
-		if humanoid and humanoid.Parent then
-			humanoid.AutoRotate = true
-		end
+	task.delay(math.max(animLen, dispTotal) + 0.1, function()
+		if humanoid and humanoid.Parent then humanoid.AutoRotate = true end
 	end)
 
-	-- =====================================================================
-	-- NOTIFY CLIENTS
-	-- =====================================================================
 	local full = deck:getFullIds()
 	local public = deck:getPublic()
 	local slotLocks = CombatManager.GetSlotLocks(player.UserId)
@@ -423,31 +429,71 @@ PlayCard.OnServerEvent:Connect(function(player, cardName, targetCharacter)
 		extraPlays = CombatManager.GetExtraPlays(player.UserId),
 		effectResults = effectResults,
 	})
-
 	UpdateHand:FireAllClients({
 		player = player,
 		publicCards = public,
 		isOwner = false,
 	})
+
+	if preset.mode == "Hub" and deck:isDepleted() then
+		task.delay(0.3, function()
+			if not player.Parent then return end
+			deck:build(PlayerDecks.get(player))
+			deck:draw(preset.handSize)
+
+			local full2 = deck:getFullIds()
+			local public2 = deck:getPublic()
+			UpdateHand:FireClient(player, {
+				fullHand = full2,
+				publicCards = public2,
+				selectableCount = preset.publicCardCount,
+				deckCount = #deck.deck,
+				isOwner = true,
+				slotLocks = {false, false, false},
+				extraPlays = 0,
+			})
+			UpdateHand:FireAllClients({
+				player = player,
+				publicCards = public2,
+				isOwner = false,
+			})
+		end)
+	end
 end)
 
 -- ============================================================================
--- LIFECYCLE
+-- QUERIES
 -- ============================================================================
-Players.PlayerAdded:Connect(function(player)
-	player.CharacterAdded:Connect(function()
-		task.wait(1)
-		dealHand(player, "InfiniteHub") -- uses player's equipped deck, but infinite redraw rules
-	end)
-end)
-
--- Add to HandManager.lua, near the bottom
 function IsPlayerOutOfCards(player)
 	local deck = playerDecks[player.UserId]
 	return not deck or deck:isDepleted()
 end
 
--- Round system integration
+-- ============================================================================
+-- LIFECYCLE
+-- ============================================================================
+local function onPlayerJoined(player)
+	local function onCharacterAdded()
+		task.wait(1)
+		dealHand(player, "InfiniteHub")
+	end
+	
+	player.CharacterAdded:Connect(onCharacterAdded)
+	if player.Character then
+		task.spawn(onCharacterAdded)
+	end
+end
+
+Players.PlayerAdded:Connect(onPlayerJoined)
+for _, p in ipairs(Players:GetPlayers()) do
+	task.spawn(function() onPlayerJoined(p) end)
+end
+-- ============================================================================
+-- ROUND SIGNAL
+-- ============================================================================
+local RoundSignal = ReplicatedStorage:FindFirstChild("RoundSignal") or Instance.new("BindableEvent")
+RoundSignal.Name = "RoundSignal"
+RoundSignal.Parent = ReplicatedStorage
 
 RoundSignal.Event:Connect(function(action, targetPlayer, presetName)
 	if action == "Deal" then
@@ -465,26 +511,7 @@ RoundSignal.Event:Connect(function(action, targetPlayer, presetName)
 	end
 end)
 
-
-
--- RoundSignal.Event:Connect(function(action, targetPlayer)
--- 	if action == "Deal" then
--- 		dealStartingHand(targetPlayer)
--- 	elseif action == "Clear" then
--- 		playerHands[targetPlayer.UserId] = nil
--- 		UpdateHand:FireClient(targetPlayer, {
--- 			fullHand = {},
--- 			publicCards = {},
--- 			selectableCount = 0,
--- 			deckCount = 0,
--- 			isOwner = true,
--- 			slotLocks = {false, false, false},
--- 			extraPlays = 0,
--- 		})
--- 		UpdateHand:FireAllClients({
--- 			player = targetPlayer,
--- 			publicCards = {},
--- 			isOwner = false,
--- 		})
--- 	end
--- end)
+return {
+	GetDeck = function(userId) return playerDecks[userId] end,
+	IsOutOfCards = IsPlayerOutOfCards,
+}

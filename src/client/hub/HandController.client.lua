@@ -13,8 +13,23 @@ local CardData = require(ReplicatedStorage.Modules.CardData)
 local FloatingHand = require(script.Parent.FloatingHand)
 local LocalHand = require(script.Parent.LocalHand)
 local CardFX = require(ReplicatedStorage.Modules.CardFX)
-local CombatUpdate = ReplicatedStorage.Remotes:WaitForChild("CombatUpdate")
+local function ensureRemote(name)
+	local remotes = ReplicatedStorage:FindFirstChild("Remotes")
+	if not remotes then
+		remotes = Instance.new("Folder")
+		remotes.Name = "Remotes"
+		remotes.Parent = ReplicatedStorage
+	end
+	local r = remotes:FindFirstChild(name)
+	if not r then
+		r = Instance.new("RemoteEvent")
+		r.Name = name
+		r.Parent = remotes
+	end
+	return r
+end
 
+local CombatUpdate = ensureRemote("CombatUpdate")
 -- ============================================================================
 -- LOCK-ON SYSTEM
 -- ============================================================================

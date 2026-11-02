@@ -1,0 +1,28 @@
+{
+  "name": "Felted-Arena",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "Modules": { "$path": "src/shared" },
+      "Vendor": { "$path": "src/vendor" },
+      "Remotes": {
+        "$className": "Folder",
+        "PlayCard": { "$className": "RemoteEvent" },
+        "UpdateHand": { "$className": "RemoteEvent" },
+        "CombatUpdate": { "$className": "RemoteEvent" },
+        "RoundUpdate": { "$className": "RemoteEvent" }
+      }
+    },
+
+    "ServerScriptService": { "$path": "src/arena" },
+
+    "ServerStorage": {
+      "Arenas": { "$className": "Folder" }
+    },
+
+    "StarterPlayer": {
+      "StarterPlayerScripts": { "$path": "src/client/arena" }
+    }
+  }
+}
