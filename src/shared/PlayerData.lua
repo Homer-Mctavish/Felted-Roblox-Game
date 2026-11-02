@@ -103,7 +103,7 @@ function PlayerData.load(player)
 	end
 	profile:AddUserId(player.UserId)
 	profile:Reconcile() -- fills missing fields from defaultData
-	profile.OnSessionEnd:Connect(function()
+	profile:ListenToRelease(function()
 		profiles[player.UserId] = nil
 		player:Kick("Session ended. Rejoin.")
 	end)

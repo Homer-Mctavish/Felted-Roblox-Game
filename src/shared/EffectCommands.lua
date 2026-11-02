@@ -14,28 +14,24 @@ return {
 	end,
 
 	Block = function(ctx)
-		local combat = ctx.session:getCombat(ctx.attacker)
-		if combat then combat.blockStacks += ctx.stacks end
+		if ctx.combat then ctx.combat.blockStacks += ctx.stacks end
 		return {Type = "Block", Stacks = ctx.stacks}
 	end,
 
 	Dodge = function(ctx)
-		local combat = ctx.session:getCombat(ctx.attacker)
-		if combat then combat.dodgeUntil = os.clock() + ctx.duration end
+		if ctx.combat then ctx.combat.dodgeUntil = os.clock() + ctx.duration end
 		return {Type = "Dodge", Duration = ctx.duration}
 	end,
 
 	Draw = function(ctx)
-		local deck = ctx.session:getDeck(ctx.attacker)
-		if not deck then return end
-		local before = #deck.hand
-		deck:draw(ctx.amount)
-		return {Type = "Draw", Amount = #deck.hand - before}
+		if not ctx.deck then return end
+		local before = #ctx.deck.hand
+		ctx.deck:draw(ctx.amount)
+		return {Type = "Draw", Amount = #ctx.deck.hand - before}
 	end,
 
 	GrantExtraPlays = function(ctx)
-		local combat = ctx.session:getCombat(ctx.attacker)
-		if combat then combat.extraPlays += ctx.amount end
+		if ctx.combat then ctx.combat.extraPlays += ctx.amount end
 		return {Type = "ExtraPlays", Amount = ctx.amount}
 	end,
 }

@@ -29,6 +29,14 @@ InfiniteHub = {
 		roundTime = 90,
 		canDealDamage = true,
 	},
+	Exploration = {
+		mode = "Exploration",
+		handSize=5,
+		publicCardCount=3,
+		loopCount = math.huge,
+		maxRecycles = 999,
+		canDealDamage = true,
+	},
 }
 
 return RoundPresets

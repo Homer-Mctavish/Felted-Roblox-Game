@@ -24,7 +24,7 @@ end
 
 local RoundUpdate = ensureRemote("RoundUpdate")
 local VoteMap = ensureRemote("VoteMap")
-local RequestRoundStart = ensureRemote("RequestRoundStart")
+local RequestMatch = ensureRemote("RequestMatch")
 
 local voteGui = nil
 local voteTimer = nil
@@ -251,8 +251,8 @@ end)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
 	if gameProcessed then return end
 	if input.KeyCode == Enum.KeyCode.M then
-			print("FIRING RequestRoundStart")
+			print("FIRING RequestMatch")
 
-		RequestRoundStart:FireServer()
+		RequestMatch:FireServer()
 	end
 end)

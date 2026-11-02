@@ -38,6 +38,7 @@ function MatchSession.new(players, arenaKey, presetName)
 			}
 		end
 	end
+	
 
 		self.playerCount = #players
 
@@ -175,6 +176,7 @@ function MatchSession:checkWin()
 end
 
 function MatchSession:cleanup()
+	if self.onCleanup then self.onCleanup() end   -- ← add this line
 	for p, d in pairs(self.players) do
 		if p.Parent then
 			pcall(function()
