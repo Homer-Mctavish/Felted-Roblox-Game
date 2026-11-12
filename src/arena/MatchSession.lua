@@ -58,9 +58,7 @@ function MatchSession:loadArena()
 	folder.Name = "ActiveMatches"
 	folder.Parent = workspace
 
-	-- self.slotIndex = self:allocateSlot()
-	-- local cf = CFrame.new(self.slotIndex * 500, 500, 0) * CFrame.Angles(math.rad(90), 0, 0)
-	-- arena:PivotTo(cf)
+	arena:PivotTo(CFrame.new(self.slotIndex * SLOT_SPACING, 0, 0))
 	arena.Parent = folder
 	self.arena = arena
 

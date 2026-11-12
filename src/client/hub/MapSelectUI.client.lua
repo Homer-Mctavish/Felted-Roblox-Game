@@ -240,6 +240,9 @@ RoundUpdate.OnClientEvent:Connect(function(data)
 	elseif data.Type == "PlayerDied" then
 		-- kill feed (optional)
 	elseif data.Type == "Timer" then
+
+	elseif data.Type == "VoteDenied" then
+		hideVote()
 		-- optional: show match timer HUD
 	end
 end)

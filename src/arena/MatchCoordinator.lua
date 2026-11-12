@@ -5,9 +5,12 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TeleportService = game:GetService("TeleportService")
+local RunService = game:GetService("RunService")
 
 local MatchSession = require(script.Parent.MatchSession)
 local CardServer = require(ReplicatedStorage.Modules.CardServer)
+local HUB_PLACE_ID = 121205119060363;
 
 local Coordinator = {
 	sessions = {},
@@ -15,6 +18,12 @@ local Coordinator = {
 	data = nil,
 	deadline = 0,
 }
+
+local MatchSession = require(script.Parent.MatchSession)
+local CardServer = require(ReplicatedStorage.Modules.CardServer)
+
+local SlotAllocator = require(script.Parent.SlotAllocator)
+local SLOT_SPACING = 1000 -- studs between concurrent matches
 
 -- ============================================================================
 -- QUERIES
@@ -41,14 +50,24 @@ end
 -- ============================================================================
 -- MATCH START (from teleport data)
 -- ============================================================================
+
 function Coordinator.launch(data, players)
-	local session = MatchSession.new(players, data.Arena, data.Preset)
-	session.onCleanup = function()
-		Coordinator.removeSession(session)
+	local session
+	local ok, err = pcall(function()
+		session = MatchSession.new(players, data.Arena, data.Preset)
+		session.slotIndex = SlotAllocator.acquire()
+		session.onCleanup = function()
+			SlotAllocator.release(session.slotIndex)
+			Coordinator.removeSession(session)
+		end
+		table.insert(Coordinator.sessions, session)
+		session:enterPhase("Loading")
+	end)
+	if not ok then
+		warn(("[MatchCoordinator] Match launch failed: %s"):format(err))
+		Coordinator.sendHome(players, "match failed to start")
 	end
-	table.insert(Coordinator.sessions, session)
-	session:enterPhase("Loading")
-	return session
+	return ok
 end
 
 function Coordinator.begin(data, userIds, timeout)
@@ -81,8 +100,12 @@ function Coordinator.check()
 	for uid, here in pairs(Coordinator.arrived) do
 		if here then
 			local p = Players:GetPlayerByUserId(uid)
-			if p and p.Character then
-				table.insert(players, p)
+			if p then
+				if p.Character then
+					table.insert(players, p)
+				else
+					allHere = false -- character still building; don't strand them
+				end
 			end
 		else
 			allHere = false
@@ -95,6 +118,18 @@ function Coordinator.check()
 		Coordinator.launch(data, players)
 	end
 end
+
+function Coordinator.sendHome(players, reason)
+	warn("[MatchCoordinator] Returning players to hub:", reason)
+	for _, p in ipairs(players) do
+		if p.Parent then
+			pcall(function()
+				TeleportService:Teleport(HUB_PLACE_ID, p)
+			end)
+		end
+	end
+end
+
 
 -- ============================================================================
 -- CARD RULES (arena: session-scoped combat, PvP only, combat phase only)
@@ -155,5 +190,27 @@ task.delay(5, function()
 end)
 
 startCardServer()
+
+-- ... startCardServer() above ...
+
+-- No-teleport-data watchdog: Studio → debug match; production → send home
+task.spawn(function()
+	while true do
+		local present = Players:GetPlayers()
+		local idle = (Coordinator.data == nil) and (#Coordinator.sessions == 0)
+		if #present > 0 and idle then
+			if RunService:IsStudio() then
+				warn(("[MatchCoordinator] No teleport data; starting debug match with %d player(s)")
+					:format(#present))
+				Coordinator.launch({Arena = "Dojo", Preset = "StandardPVP"}, present)
+			else
+				Coordinator.sendHome(present, "no match data")
+			end
+			return
+		end
+		if not idle then return end
+		task.wait(5)
+	end
+end)
 
 return Coordinator
