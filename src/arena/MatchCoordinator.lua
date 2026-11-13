@@ -1,7 +1,7 @@
 -- Arena MatchCoordinator: reconstructs one match per server from teleport
 -- data, and injects the arena's rules into the shared CardServer.
 -- Self-wiring: requiring this module sets up arrival tracking, card rules,
--- and a debug fallback. Arena Boot only needs to require it.
+-- and a no-data watchdog. Arena Boot only needs to require it.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -10,20 +10,21 @@ local RunService = game:GetService("RunService")
 
 local MatchSession = require(script.Parent.MatchSession)
 local CardServer = require(ReplicatedStorage.Modules.CardServer)
-local HUB_PLACE_ID = 121205119060363;
+local SlotAllocator = require(script.Parent.SlotAllocator)
+
+-- MUST be the hub/start place ID (same value as in MatchSession.lua).
+-- Never the arena's own ID, or sendHome teleports players into the arena again.
+local HUB_PLACE_ID = 78822459265548
+
+local SLOT_SPACING = 1000 -- studs between concurrent matches (defensive; reserved servers make this moot)
 
 local Coordinator = {
 	sessions = {},
 	arrived = {},
 	data = nil,
 	deadline = 0,
+	cardServer = nil,
 }
-
-local MatchSession = require(script.Parent.MatchSession)
-local CardServer = require(ReplicatedStorage.Modules.CardServer)
-
-local SlotAllocator = require(script.Parent.SlotAllocator)
-local SLOT_SPACING = 1000 -- studs between concurrent matches
 
 -- ============================================================================
 -- QUERIES
@@ -50,6 +51,16 @@ end
 -- ============================================================================
 -- MATCH START (from teleport data)
 -- ============================================================================
+function Coordinator.sendHome(players, reason)
+	warn("[MatchCoordinator] Returning players to hub:", reason)
+	for _, p in ipairs(players) do
+		if p.Parent then
+			pcall(function()
+				TeleportService:Teleport(HUB_PLACE_ID, p)
+			end)
+		end
+	end
+end
 
 function Coordinator.launch(data, players)
 	local session
@@ -64,6 +75,9 @@ function Coordinator.launch(data, players)
 		session:enterPhase("Loading")
 	end)
 	if not ok then
+		if session and session.slotIndex then
+			SlotAllocator.release(session.slotIndex) -- don't leak the slot on a failed launch
+		end
 		warn(("[MatchCoordinator] Match launch failed: %s"):format(err))
 		Coordinator.sendHome(players, "match failed to start")
 	end
@@ -119,23 +133,11 @@ function Coordinator.check()
 	end
 end
 
-function Coordinator.sendHome(players, reason)
-	warn("[MatchCoordinator] Returning players to hub:", reason)
-	for _, p in ipairs(players) do
-		if p.Parent then
-			pcall(function()
-				TeleportService:Teleport(HUB_PLACE_ID, p)
-			end)
-		end
-	end
-end
-
-
 -- ============================================================================
 -- CARD RULES (arena: session-scoped combat, PvP only, combat phase only)
 -- ============================================================================
 local function startCardServer()
-	CardServer.start({
+	local cardServer = CardServer.start({
 		presetName = "StandardPVP",
 		autoDeal = false, -- MatchSession deals match hands
 
@@ -160,9 +162,15 @@ local function startCardServer()
 			local target = Players:GetPlayerFromCharacter(targetCharacter)
 			local session = Coordinator.findSession(target)
 			if not session then return {Damage = 0} end
-			return session:getCombat(target):takeDamage(amount)
+			local res = session:getCombat(target):takeDamage(amount)
+			if res.Damage > 0 and Coordinator.cardServer then
+				Coordinator.cardServer.interrupt(target) -- hit-stun: cancel swing, restore control
+			end
+			return res
 		end,
 	})
+	Coordinator.cardServer = cardServer -- stash for the damage rule above
+	return cardServer
 end
 
 -- ============================================================================
@@ -179,21 +187,8 @@ Players.PlayerAdded:Connect(function(player)
 	end
 end)
 
--- DEV ONLY: no teleport data (testing arena.rbxl directly) → start a debug
--- match with whoever is present. Delete this block once the hub chain works.
-task.delay(5, function()
-	if Coordinator.data or #Coordinator.sessions > 0 then return end
-	local present = Players:GetPlayers()
-	if #present == 0 then return end
-	warn("[MatchCoordinator] No teleport data; starting debug match")
-	Coordinator.launch({Arena = "Dojo", Preset = "StandardPVP"}, present)
-end)
-
-startCardServer()
-
--- ... startCardServer() above ...
-
--- No-teleport-data watchdog: Studio → debug match; production → send home
+-- No-teleport-data watchdog. Studio: start a debug match once players exist.
+-- Production: nobody should be here without match data — send them home.
 task.spawn(function()
 	while true do
 		local present = Players:GetPlayers()
@@ -212,5 +207,7 @@ task.spawn(function()
 		task.wait(5)
 	end
 end)
+
+startCardServer()
 
 return Coordinator

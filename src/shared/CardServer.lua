@@ -11,9 +11,17 @@
 --   canDamage         : (attacker, targetCharacter) -> boolean
 --   damage            : (targetCharacter, amount, attacker) -> result table
 --   refillDepleted    : boolean?  — default false; rebuild deck when it runs out
+--
+-- CardData governs presentation per card:
+--   AnimationId : plays in place (root motion consumed & discarded)
+--   Displacement: { Distance = +toward / -away from lock-on target (studs),
+--                   Duration, Delay, Easing, Height = optional grounded arc,
+--                   LockInput = false keeps player control during the move }
+--   FX          : played client-side by CardFX
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
 
 local CardData = require(ReplicatedStorage.Modules.CardData)
 local Deck = require(ReplicatedStorage.Modules.Deck)
@@ -37,6 +45,26 @@ function CardServer.start(rules)
 
 	local playerDecks = {} -- [userId] = Deck (used when rules.getDeck is absent)
 	local debounce = {}    -- [userId] = bool
+
+	local activePlays = {} -- [userId] = {track, connection, humanoid, playId}
+
+	local function restoreControl(userId, humanoid)
+		local play = activePlays[userId]
+		if not play then return end
+		play.playId += 1 -- invalidates any in-flight loops
+		if play.connection then play.connection:Disconnect() end
+		if play.track and play.track.IsPlaying then play.track:Stop(0.1) end
+		if humanoid and humanoid.Parent then
+			humanoid.AutoRotate = true
+			humanoid.WalkSpeed = 16
+		end
+		activePlays[userId] = nil
+	end
+
+	function CardServer.interrupt(player)
+		local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+		restoreControl(player.UserId, hum)
+	end
 
 	local function getDeck(player)
 		if rules.getDeck then
@@ -101,6 +129,9 @@ function CardServer.start(rules)
 		debounce[player.UserId] = true
 		task.delay(0.35, function() debounce[player.UserId] = nil end)
 
+		-- can't play a new card mid-swing (interrupt clears this)
+		if activePlays[player.UserId] then return end
+
 		-- --- deck + card lookup ---
 		local deck = getDeck(player)
 		if not deck then return end
@@ -129,9 +160,6 @@ function CardServer.start(rules)
 		local humanoid = character:FindFirstChildOfClass("Humanoid")
 		local root = character:FindFirstChild("HumanoidRootPart")
 		if not humanoid or not root then return end
-
-		humanoid.AutoRotate = false
-		local attackYaw = math.atan2(root.CFrame.LookVector.X, root.CFrame.LookVector.Z)
 
 		-- --- consume the card ---
 		local playedCard = deck:play(index)
@@ -173,8 +201,8 @@ function CardServer.start(rules)
 		end
 		deck:recordPlay(cardName, hitLanded)
 
-		-- --- animation ---
-		local track = nil
+		-- --- animation + displacement ---
+		-- Cards without an AnimationId play instantly with no lock.
 		if CardData[cardName].AnimationId then
 			local animator = humanoid:FindFirstChildOfClass("Animator")
 			if not animator then
@@ -183,59 +211,108 @@ function CardServer.start(rules)
 			end
 			local animation = Instance.new("Animation")
 			animation.AnimationId = CardData[cardName].AnimationId
-			track = animator:LoadAnimation(animation)
+			local track = animator:LoadAnimation(animation)
 			track.Looped = false
 			track.Priority = Enum.AnimationPriority.Action
-			track:Play()
-		end
 
-		-- --- displacement ---
-		local disp = CardData[cardName].Displacement
-		if disp then
-			task.delay(disp.Delay or 0, function()
-				if not root.Parent then return end
-				root.AssemblyLinearVelocity = Vector3.zero
-				root.AssemblyAngularVelocity = Vector3.zero
+			-- R15: "Root" Motor6D lives in LowerTorso. R6: "RootJoint".
+			local rootJoint = (character:FindFirstChild("LowerTorso")
+					and character.LowerTorso:FindFirstChild("Root"))
+				or character:FindFirstChild("RootJoint", true)
 
-				local oldWalkSpeed = humanoid.WalkSpeed
-				if disp.LockInput then humanoid.WalkSpeed = 0 end
+			-- Displacement is separate from the animation, governed by
+			-- CardData.Displacement. Direction comes from the lock-on target
+			-- sent with the play; positive Distance = toward it, negative = away.
+			local disp = CardData[cardName].Displacement
+			local lockMove = not disp or disp.LockInput ~= false -- default: locked
+			local arc = disp and disp.Height and disp.Height > 0
 
-				local forward = Vector3.new(math.sin(attackYaw), 0, math.cos(attackYaw))
-				local startPos = root.Position
-				local goalPos = startPos + forward * disp.Distance
+			if lockMove then
+				humanoid.AutoRotate = false
+				humanoid.WalkSpeed = 0
+			end
 
-				local startTime = os.clock()
-				while os.clock() - startTime < disp.Duration do
-					if not root.Parent then break end
-					local t = (os.clock() - startTime) / disp.Duration
-					if disp.Easing == "OutQuad" then
-						t = 1 - (1 - t) * (1 - t)
-					elseif disp.Easing == "InOutQuad" then
-						t = t < 0.5 and 2 * t * t or 1 - math.pow(-2 * t + 2, 2) / 2
-					end
+			local dispDir, dispDist
+			if disp and disp.Distance and disp.Distance ~= 0 then
+				dispDist = math.abs(disp.Distance)
+				local base
+				local troot = targetCharacter and targetCharacter:FindFirstChild("HumanoidRootPart")
+				if troot then
+					local d = Vector3.new(troot.Position.X - root.Position.X, 0, troot.Position.Z - root.Position.Z)
+					if d.Magnitude > 0.5 then base = d.Unit end
+				end
+				if not base then
+					base = Vector3.new(root.CFrame.LookVector.X, 0, root.CFrame.LookVector.Z).Unit
+				end
+				dispDir = (disp.Distance > 0) and base or -base
+			end
 
-					local newX = startPos.X + (goalPos.X - startPos.X) * t
-					local newZ = startPos.Z + (goalPos.Z - startPos.Z) * t
-					local newY = startPos.Y
-					if disp.Height then
-						newY = startPos.Y + disp.Height * math.sin(t * math.pi)
-					end
+			local playId = (activePlays[player.UserId] and activePlays[player.UserId].playId or 0) + 1
+			local lastEased = 0
+			local startTime = os.clock()
+			local startY = root.Position.Y
 
-					local rx, ry, rz = root.CFrame:ToOrientation()
-					root.CFrame = CFrame.new(newX, newY, newZ) * CFrame.Angles(rx, ry, rz)
-					task.wait()
+			local function ease(t)
+				if disp and disp.Easing == "OutQuad" then
+					return 1 - (1 - t) * (1 - t)
+				elseif disp and disp.Easing == "InOutQuad" then
+					return t < 0.5 and 2 * t * t or 1 - math.pow(-2 * t + 2, 2) / 2
+				end
+				return t
+			end
+
+			local connection
+			connection = RunService.Heartbeat:Connect(function()
+				local play = activePlays[player.UserId]
+				if not play or play.playId ~= playId or not track.IsPlaying then
+					restoreControl(player.UserId, humanoid)
+					return
 				end
 
-				if disp.LockInput then humanoid.WalkSpeed = oldWalkSpeed end
-			end)
-		end
+				-- Pin the animation: consume root motion so the CLIP never
+				-- moves the character. Displacement below is the only mover.
+				if rootJoint then
+					rootJoint.Transform = CFrame.identity
+				end
 
-		-- --- restore character control ---
-		local animLen = track and track.Length or 0.5
-		local dispTotal = disp and ((disp.Delay or 0) + disp.Duration) or 0
-		task.delay(math.max(animLen, dispTotal) + 0.1, function()
-			if humanoid and humanoid.Parent then humanoid.AutoRotate = true end
-		end)
+				-- Displacement from CardData, eased, horizontal (+ optional arc).
+				if dispDir then
+					local raw = (os.clock() - startTime - (disp.Delay or 0)) / (disp.Duration or 0.2)
+					raw = math.clamp(raw, 0, 1)
+					local eased = ease(raw)
+					local step = eased - lastEased
+					lastEased = eased
+					if step ~= 0 or (arc and raw < 1) then
+						local cf = root.CFrame
+						local newPos = cf.Position + dispDir * (dispDist * step)
+						if arc then
+							newPos = Vector3.new(newPos.X,
+								startY + disp.Height * math.sin(math.pi * eased),
+								newPos.Z)
+						end
+						root.CFrame = CFrame.new(newPos) * (cf - cf.Position)
+					end
+				end
+
+				-- Physics coordination: only fight physics when we've taken
+				-- control (locked) or are holding an arc; otherwise the
+				-- player keeps control (LockInput = false, e.g. Dodge).
+				if lockMove or arc then
+					root.AssemblyLinearVelocity = Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
+				end
+			end)
+			activePlays[player.UserId] = {track = track, connection = connection, humanoid = humanoid, playId = playId}
+
+			-- control returns exactly when the swing ends — no guessing
+			track.Ended:Connect(function()
+				local play = activePlays[player.UserId]
+				if play and play.track == track then
+					restoreControl(player.UserId, humanoid)
+				end
+			end)
+
+			track:Play()
+		end
 
 		-- --- notify ---
 		pushHand(player)
@@ -257,6 +334,7 @@ function CardServer.start(rules)
 	Players.PlayerRemoving:Connect(function(player)
 		playerDecks[player.UserId] = nil
 		debounce[player.UserId] = nil
+		restoreControl(player.UserId, nil)
 	end)
 
 	if autoDeal then

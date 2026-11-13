@@ -73,7 +73,7 @@ local ProfileService = require(ReplicatedStorage.Vendor.ProfileService)
 local PlayerData = {}
 local profiles = {} -- [userId] = Profile
 
-local CURRENT_SCHEMA = 2
+local CURRENT_SCHEMA = 3 -- was 2
 
 local function defaultData()
 	return {
@@ -86,6 +86,15 @@ local function defaultData()
 			{id = "Draw", count = 2, canRecycle = false},
 			{id = "Recycle", count = 2, canRecycle = true},
 		}},
+		collection = { -- NEW: cards owned; seeded to match the old fixed pool
+			["Strike"] = 6, ["Block"] = 4, ["HeavyStrike"] = 2,
+			["Dodge"] = 2, ["Draw"] = 2, ["Recycle"] = 2,
+		},
+		casino = { -- NEW: dealer mastery + lifetime stats
+			mastery = {},
+			lifetimeChipsWon = 0,
+		},
+		dust = 0, -- NEW: reserved for duplicate-card conversion (later)
 		cosmetics = {},
 		currency = 0,
 		wins = 0,

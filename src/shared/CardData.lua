@@ -5,7 +5,7 @@ local CardData = {
 		Type = "Attack",
 		Rarity = "Common",
 		Description = "Deal 3 damage",
-		AnimationId = "rbxassetid://135603995194805",
+		AnimationId = "rbxassetid://89308307579246",
 		Effects = {
 			{ Type = "Damage", Amount = 3 }
 		},

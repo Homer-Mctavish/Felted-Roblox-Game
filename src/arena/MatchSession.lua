@@ -3,13 +3,15 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerStorage = game:GetService("ServerStorage")
 local TeleportService = game:GetService("TeleportService")
 
-local HUB_PLACE_ID = 78822459265548
+local HUB_PLACE_ID = 78822459265548 -- hub/start place; players return here after the match
+
 local EventBus = require(ReplicatedStorage.Modules.EventBus)
 local Deck = require(ReplicatedStorage.Modules.Deck)
 local CardInventory = require(ReplicatedStorage.Modules.CardInventory)
 local CombatState = require(script.Parent.CombatState)
 local RoundPresets = require(ReplicatedStorage.Modules.RoundPresets)
 local ArenaData = require(ReplicatedStorage.Modules.ArenaData)
+local SlotAllocator = require(script.Parent.SlotAllocator)
 
 local UpdateHand = ReplicatedStorage.Remotes.UpdateHand
 
@@ -19,14 +21,15 @@ MatchSession.__index = MatchSession
 function MatchSession.new(players, arenaKey, presetName)
 	local self = setmetatable({}, MatchSession)
 	self.id = HttpService:GenerateGUID(false)
-	self.arenaKey = arenaKey  -- FIX #1: was never stored, loadArena() read nil
+	self.arenaKey = arenaKey
 	self.preset = RoundPresets[presetName] or RoundPresets.StandardPVP
 	self.players = {}
+	self.playerCount = #players
 	self.phase = "Loading"
 	self.timer = 0
 	self.events = EventBus.new()
 	self.arena = nil
-	-- self.slotIndex = nil
+	self.slotIndex = 0 -- set by Coordinator.launch via SlotAllocator
 	self.winner = nil
 
 	for _, p in ipairs(players) do
@@ -38,27 +41,33 @@ function MatchSession.new(players, arenaKey, presetName)
 			}
 		end
 	end
-	
-
-		self.playerCount = #players
 
 	return self
 end
 
 function MatchSession:loadArena()
 	local info = ArenaData[self.arenaKey]
+	if not info then
+		error(("[MatchSession] Unknown arena key '%s'"):format(tostring(self.arenaKey)))
+	end
 	local template = ServerStorage.Arenas:FindFirstChild(info.ModelName)
+	if not template then
+		error(("[MatchSession] Arena model '%s' missing from ServerStorage.Arenas"):format(tostring(info.ModelName)))
+	end
 	local arena = template:Clone()
 
 	for _, part in ipairs(arena:GetDescendants()) do
 		if part:IsA("BasePart") then part.Anchored = true end
 	end
 
+	-- Slot offset: separates this match from any other session sharing the
+	-- server. Slot 0 (reserved servers) leaves the arena at its authored spot.
+	arena:PivotTo(CFrame.new((self.slotIndex or 0) * SlotAllocator.SPACING, 0, 0))
+
 	local folder = workspace:FindFirstChild("ActiveMatches") or Instance.new("Folder")
 	folder.Name = "ActiveMatches"
 	folder.Parent = workspace
 
-	arena:PivotTo(CFrame.new(self.slotIndex * SLOT_SPACING, 0, 0))
 	arena.Parent = folder
 	self.arena = arena
 
@@ -80,7 +89,7 @@ function MatchSession:loadArena()
 		if not spawn then
 			warn(("[MatchSession] Arena '%s' has no SpawnN parts; spawning above arena origin")
 				:format(info.ModelName))
-			spawn = arenaCF + Vector3.new(0, 10, 0)  -- derived, not magic: "near the arena"
+			spawn = arenaCF + Vector3.new(0, 10, 0)
 		end
 		player.Character:PivotTo(spawn + Vector3.new(0, 3, 0))
 		i += 1
@@ -91,23 +100,6 @@ function MatchSession:loadArena()
 		self:pushHand(player)
 	end
 end
-
--- function MatchSession:allocateSlot()
--- 	_G._matchSlots = _G._matchSlots or {}
--- 	for idx = 0, 99 do
--- 		if not _G._matchSlots[idx] then
--- 			_G._matchSlots[idx] = true
--- 			return idx
--- 		end
--- 	end
--- 	return 0
--- end
-
--- function MatchSession:freeSlot()
--- 	if self.slotIndex then
--- 		_G._matchSlots[self.slotIndex] = nil
--- 	end
--- end
 
 function MatchSession:pushHand(player)
 	local data = self.players[player]
@@ -174,7 +166,7 @@ function MatchSession:checkWin()
 end
 
 function MatchSession:cleanup()
-	if self.onCleanup then self.onCleanup() end   -- ← add this line
+	if self.onCleanup then self.onCleanup() end -- slot release + session removal
 	for p, d in pairs(self.players) do
 		if p.Parent then
 			pcall(function()
